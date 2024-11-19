@@ -74,7 +74,7 @@ class TextNode:
     RETURN_TYPES = ("TEXT",)
     FUNCTION = "encode"
 
-    CATEGORY = "AIFSH_CosyVoice"
+    CATEGORY = "ComfyUI-CosyVoice"
 
     def encode(self,text):
         return (text, )
@@ -115,7 +115,7 @@ class CosyVoiceNode:
 
     #OUTPUT_NODE = False
 
-    CATEGORY = "AIFSH_CosyVoice"
+    CATEGORY = "ComfyUI-CosyVoice"
 
     def generate(self,tts_text,speed,inference_mode,sft_dropdown,seed,
                  prompt_text=None,prompt_wav=None,instruct_text=None):
@@ -208,7 +208,7 @@ class CosyVoiceDubbingNode:
 
     #OUTPUT_NODE = False
 
-    CATEGORY = "AIFSH_CosyVoice"
+    CATEGORY = "ComfyUI-CosyVoice"
 
     def generate(self,tts_srt,prompt_wav,language,if_single,seed,prompt_srt=None):
         model_dir = os.path.join(pretrained_models,"CosyVoice-300M")
@@ -336,7 +336,7 @@ class LoadSRT:
                     {"srt": (sorted(files),)},
                 }
 
-    CATEGORY = "AIFSH_CosyVoice"
+    CATEGORY = "ComfyUI-CosyVoice"
 
     RETURN_TYPES = ("SRT",)
     FUNCTION = "load_srt"

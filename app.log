@@ -1,0 +1,18 @@
+2024-11-21 19:42:02 - __main__ - INFO - Application started.
+2024-11-21 19:57:06 - __main__ - INFO - Application started.
+2024-11-21 20:15:40 - __main__ - INFO - Application started.
+2024-11-21 20:16:57 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): www.modelscope.cn:443
+2024-11-21 20:16:58 - urllib3.connectionpool - DEBUG - https://www.modelscope.cn:443 "GET /api/v1/models/iic/CosyVoice-300M-SFT/revisions HTTP/1.1" 200 191
+2024-11-21 20:16:58 - urllib3.connectionpool - DEBUG - https://www.modelscope.cn:443 "GET /api/v1/models/iic/CosyVoice-300M-SFT/repo/files?Revision=master&Recursive=True HTTP/1.1" 200 None
+2024-11-21 20:16:58 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): www.modelscope.cn:443
+2024-11-21 20:16:59 - urllib3.connectionpool - DEBUG - https://www.modelscope.cn:443 "GET /api/v1/models/iic/CosyVoice-300M-SFT/revisions HTTP/1.1" 200 191
+2024-11-21 20:16:59 - urllib3.connectionpool - DEBUG - https://www.modelscope.cn:443 "GET /api/v1/models/iic/CosyVoice-300M-SFT/repo/files?Revision=master&Recursive=True HTTP/1.1" 200 None
+2024-11-21 20:17:04 - root - INFO - input frame rate=50
+2024-11-21 20:17:07 - wetext-zh_normalizer - INFO - found existing fst: D:\WorkProject\tts\ComfyUI-CosyVoice\tn\zh_tn_tagger.fst
+2024-11-21 20:17:07 - wetext-zh_normalizer - INFO -                     D:\WorkProject\tts\ComfyUI-CosyVoice\tn\zh_tn_verbalizer.fst
+2024-11-21 20:17:07 - wetext-zh_normalizer - INFO - skip building fst for zh_normalizer ...
+2024-11-21 20:17:08 - wetext-en_normalizer - INFO - found existing fst: D:\WorkProject\tts\ComfyUI-CosyVoice\tn\en_tn_tagger.fst
+2024-11-21 20:17:08 - wetext-en_normalizer - INFO -                     D:\WorkProject\tts\ComfyUI-CosyVoice\tn\en_tn_verbalizer.fst
+2024-11-21 20:17:08 - wetext-en_normalizer - INFO - skip building fst for en_normalizer ...
+2024-11-21 20:17:16 - root - INFO - synthesis text 欢迎来到我的频道,这里有最先进智能语音生成系统!
+2024-11-21 20:17:30 - root - INFO - yield speech len 3.6919727891156464, rtf 3.9868550480536693

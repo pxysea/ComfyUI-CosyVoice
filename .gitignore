@@ -1,2 +1,6 @@
 __pycache__
 pretrained_models
+test*
+test\**
+tools
+.vscode

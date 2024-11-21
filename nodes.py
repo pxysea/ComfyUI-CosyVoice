@@ -1,3 +1,4 @@
+import logging
 import torch
 import random
 import librosa
@@ -16,8 +17,10 @@ from modelscope import snapshot_download
 
 import ffmpeg
 import audiosegment
-from srt import parse as SrtPare
+from srt import parse as SrtParse
 from cosyvoice.cli.cosyvoice import CosyVoice
+
+logger = logging.getLogger(__name__)
 
 sft_spk_list = ['中文女', '中文男', '日语男', '粤语女', '英文女', '英文男', '韩语女']
 inference_mode_list = ['预训练音色', '3s极速复刻', '跨语种复刻', '自然语言控制']
@@ -30,6 +33,8 @@ def set_all_random_seed(seed):
 
 max_val = 0.8
 prompt_sr, target_sr = 16000, 22050
+
+
 def postprocess(speech, top_db=60, hop_length=220, win_length=440):
     speech, _ = librosa.effects.trim(
         speech, top_db=top_db,
@@ -39,33 +44,62 @@ def postprocess(speech, top_db=60, hop_length=220, win_length=440):
     if speech.abs().max() > max_val:
         speech = speech / speech.abs().max() * max_val
     speech = torch.concat([speech, torch.zeros(1, int(target_sr * 0.2))], dim=1)
+    
     return speech
 
 def speed_change(input_audio, speed, sr):
-    # 检查输入数据类型和声道数
+    """
+    Adjusts the speed of the input audio using FFmpeg.
+    
+    Args:
+        input_audio (np.ndarray): Audio data in np.int16 format.
+        speed (float): Speed factor (e.g., 1.2 for 20% faster).
+        sr (int): Sampling rate of the input audio.
+
+    Returns:
+        np.ndarray: Processed audio with adjusted speed.
+    """
+    import ffmpeg
+
     if input_audio.dtype != np.int16:
-        raise ValueError("输入音频数据类型必须为 np.int16")
+        raise ValueError("Input audio data must be of type np.int16")
 
-
-    # 转换为字节流
+    # Convert the audio to raw byte format
     raw_audio = input_audio.astype(np.int16).tobytes()
-
-    # 设置 ffmpeg 输入流
+    
+    # Set up the FFmpeg input and apply atempo filter for speed change
     input_stream = ffmpeg.input('pipe:', format='s16le', acodec='pcm_s16le', ar=str(sr), ac=1)
-
-    # 变速处理
     output_stream = input_stream.filter('atempo', speed)
-
-    # 输出流到管道
+    
+    # Capture the processed audio from FFmpeg
     out, _ = (
         output_stream.output('pipe:', format='s16le', acodec='pcm_s16le')
         .run(input=raw_audio, capture_stdout=True, capture_stderr=True)
     )
+    return np.frombuffer(out, np.int16)
 
-    # 将管道输出解码为 NumPy 数组
-    processed_audio = np.frombuffer(out, np.int16)
 
-    return processed_audio
+def load_cosyvoice(inference_mode,prompt_wav,prompt_text, instruct_text):
+    if inference_mode == '自然语言控制':
+        model_dir = os.path.join(pretrained_models,"CosyVoice-300M-Instruct")
+        snapshot_download(model_id="iic/CosyVoice-300M-Instruct",local_dir=model_dir)
+        assert instruct_text is not None, "in 自然语言控制 mode, instruct_text can't be none"
+    if inference_mode in ["跨语种复刻",'3s极速复刻']:
+        model_dir = os.path.join(pretrained_models,"CosyVoice-300M")
+        snapshot_download(model_id="iic/CosyVoice-300M",local_dir=model_dir)
+        assert prompt_wav is not None, "in 跨语种复刻 or 3s极速复刻 mode, prompt_wav can't be none"
+        if inference_mode == "3s极速复刻":
+            assert len(prompt_text) > 0, "prompt文本为空，您是否忘记输入prompt文本？"
+    if inference_mode == "预训练音色":
+        model_dir = os.path.join(pretrained_models,"CosyVoice-300M-SFT")
+        snapshot_download(model_id="iic/CosyVoice-300M-SFT",local_dir=model_dir)
+
+
+    if model_dir != model_dir:
+        model_dir = model_dir
+
+    return CosyVoice(model_dir)
+
 
 class TextNode:
     @classmethod
@@ -80,6 +114,7 @@ class TextNode:
         return (text, )
 
 from time import time as ttime
+
 class CosyVoiceNode:
     def __init__(self):
         self.model_dir = None
@@ -137,7 +172,9 @@ class CosyVoiceNode:
 
         if self.model_dir != model_dir:
             self.model_dir = model_dir
-            self.cosyvoice = CosyVoice(model_dir)
+
+        if self.cosyvoice is None:
+            self.cosyvoice = load_cosyvoice(inference_mode,prompt_text=prompt_text,prompt_wav=prompt_wav,instruct_text=instruct_text)
         
         if prompt_wav:
             waveform = prompt_wav['waveform'].squeeze(0)
@@ -153,13 +190,13 @@ class CosyVoiceNode:
         elif inference_mode == '3s极速复刻':
             print('get zero_shot inference request')
             print(self.model_dir)
-            prompt_speech_16k = postprocess(speech)
+            prompt_speech_16k = postprocess(speech= speech,target_sr=target_sr,max_val=max_val)
             set_all_random_seed(seed)
             output = self.cosyvoice.inference_zero_shot(tts_text, prompt_text, prompt_speech_16k)
         elif inference_mode == '跨语种复刻':
             print('get cross_lingual inference request')
             print(self.model_dir)
-            prompt_speech_16k = postprocess(speech)
+            prompt_speech_16k = postprocess(speech= speech,target_sr=target_sr,max_val=max_val)
             set_all_random_seed(seed)
             output = self.cosyvoice.inference_cross_lingual(tts_text, prompt_speech_16k)
         else:
@@ -179,154 +216,193 @@ class CosyVoiceNode:
         audio = {"waveform": torch.cat(output_list,dim=1).unsqueeze(0),"sample_rate":target_sr}
         return (audio,)
 
+
 class CosyVoiceDubbingNode:
     def __init__(self):
         self.cosyvoice = None
 
     @classmethod
-    def INPUT_TYPES(s):
+    def INPUT_TYPES(cls):
         return {
-            "required":{
-                "tts_srt":("SRT",),
+            "required": {
+                "tts_srt": ("SRT",),
                 "prompt_wav": ("AUDIO",),
-                "language":(["<|zh|>","<|en|>","<|jp|>","<|yue|>","<|ko|>"],),
-                "if_single":("BOOLEAN",{
-                    "default": True
-                }),
-                "seed":("INT",{
-                    "default": 42
-                })
+                "language": (["<|zh|>", "<|en|>", "<|jp|>", "<|yue|>", "<|ko|>"],),
+                "if_single": ("BOOLEAN", {"default": True}),
+                "seed": ("INT", {"default": 42}),
             },
-            "optional":{
-                "prompt_srt":("SRT",),
+            "optional": {
+                "prompt_srt": ("SRT",),
             }
         }
+
     RETURN_TYPES = ("AUDIO",)
-    #RETURN_NAMES = ("image_output_name",)
-
     FUNCTION = "generate"
-
-    #OUTPUT_NODE = False
-
     CATEGORY = "ComfyUI-CosyVoice"
 
-    def generate(self,tts_srt,prompt_wav,language,if_single,seed,prompt_srt=None):
-        model_dir = os.path.join(pretrained_models,"CosyVoice-300M")
-        snapshot_download(model_id="iic/CosyVoice-300M",local_dir=model_dir)
+    def generate(self, tts_srt, prompt_wav, language, if_single, seed, prompt_srt=None):
+        # Initialize the model
+        model_dir = os.path.join(pretrained_models, "CosyVoice-300M")
+        snapshot_download(model_id="iic/CosyVoice-300M", local_dir=model_dir)
         set_all_random_seed(seed)
+        
         if self.cosyvoice is None:
+            logger.info("Initializing CosyVoice model...")
             self.cosyvoice = CosyVoice(model_dir)
         
-        with open(tts_srt, 'r', encoding="utf-8") as file:
-            text_file_content = file.read()
-        text_subtitles = list(SrtPare(text_file_content))
+        # Load subtitle files
+        logger.info("Loading TTS SRT subtitles...")
+        text_subtitles = self.load_srt(tts_srt)
+        prompt_subtitles = self.load_srt(prompt_srt) if prompt_srt else None
 
-        if prompt_srt:
-            with open(prompt_srt, 'r', encoding="utf-8") as file:
-                prompt_file_content = file.read()
-            prompt_subtitles = list(SrtPare(prompt_file_content))
-
-        waveform = prompt_wav['waveform'].squeeze(0)
-        source_sr = prompt_wav['sample_rate']
-        speech = waveform.mean(dim=0,keepdim=True)
-        if source_sr != prompt_sr:
-            speech = torchaudio.transforms.Resample(orig_freq=source_sr, new_freq=prompt_sr)(speech)
-        speech_numpy = speech.squeeze(0).numpy() * 32768
+        # Preprocess prompt audio
+        logger.info("Preprocessing prompt audio...")
+        speech_numpy, prompt_sr = self.preprocess_audio(prompt_wav)
         speech_numpy = speech_numpy.astype(np.int16)
-        audio_seg = audiosegment.from_numpy_array(speech_numpy,prompt_sr)
-        assert audio_seg.duration_seconds > 3, "prompt wav should be > 3s"
-        # audio_seg.export(os.path.join(output_dir,"test.mp3"),format="mp3")
-        new_audio_seg = audiosegment.silent(0,target_sr)
-        for i,text_sub in enumerate(text_subtitles):
-            start_time = text_sub.start.total_seconds() * 1000
-            end_time = text_sub.end.total_seconds() * 1000
-            if i == 0:
-                new_audio_seg += audio_seg[:start_time]
-            
-            if if_single:
-                curr_tts_text = language + text_sub.content
-            else:
-                curr_tts_text = language + text_sub.content[1:]
-                speaker_id = text_sub.content[0]
-            
-            prompt_wav_seg = audio_seg[start_time:end_time]
-            if prompt_srt:
-                prompt_text_list = [prompt_subtitles[i].content]
-            while prompt_wav_seg.duration_seconds < 30:
-                for j in range(i+1,len(text_subtitles)):
-                    j_start = text_subtitles[j].start.total_seconds() * 1000
-                    j_end = text_subtitles[j].end.total_seconds() * 1000
-                    if if_single:
-                        prompt_wav_seg += (audiosegment.silent(500,frame_rate=prompt_sr) + audio_seg[j_start:j_end])
-                        if prompt_srt:
-                            prompt_text_list.append(prompt_subtitles[j].content)
-                    else:
-                        if text_subtitles[j].content[0] == speaker_id:
-                            prompt_wav_seg += (audiosegment.silent(500,frame_rate=prompt_sr) + audio_seg[j_start:j_end])
-                            if prompt_srt:
-                                prompt_text_list.append(prompt_subtitles[j].content)
-                for j in range(0,i):
-                    j_start = text_subtitles[j].start.total_seconds() * 1000
-                    j_end = text_subtitles[j].end.total_seconds() * 1000
-                    if if_single:
-                        prompt_wav_seg += (audiosegment.silent(500,frame_rate=prompt_sr) + audio_seg[j_start:j_end])
-                        if prompt_srt:
-                            prompt_text_list.append(prompt_subtitles[j].content)
-                    else:
-                        if text_subtitles[j].content[0] == speaker_id:
-                            prompt_wav_seg += (audiosegment.silent(500,frame_rate=prompt_sr) + audio_seg[j_start:j_end])
-                            if prompt_srt:
-                                prompt_text_list.append(prompt_subtitles[j].content)
+        audio_seg = audiosegment.from_numpy_array(speech_numpy, prompt_sr)
 
-                if prompt_wav_seg.duration_seconds > 3:
-                    break
-            print(f"prompt_wav {prompt_wav_seg.duration_seconds}s")
-            prompt_wav_seg.export(os.path.join(output_dir,f"{i}_prompt.wav"),format="wav")
-            prompt_wav_seg_numpy = prompt_wav_seg.to_numpy_array() / 32768
-            # print(prompt_wav_seg_numpy.shape)
+        # Validate prompt audio duration
+        assert audio_seg.duration_seconds > 3, "Prompt wav must be longer than 3 seconds."
+        audio_seg.export(os.path.join(output_dir, "test.mp3"), format="mp3")
+        
+        # Generate synthesized audio segments
+        new_audio_seg = audiosegment.silent(0, target_sr)  # target_sr = 22050
+
+        for i, text_sub in enumerate(text_subtitles):
+            logger.info(f"Processing subtitle {i + 1}/{len(text_subtitles)}...")
+            
+            curr_tts_text, prompt_wav_seg = self.get_tts_text_and_prompt(
+                text_sub, i, text_subtitles, language, if_single, audio_seg, prompt_srt, prompt_subtitles
+            )
+            
+            # Convert prompt audio segment to Tensor
+            prompt_wav_seg_numpy = prompt_wav_seg.to_numpy_array() / 32768  # Normalize to [-1, 1]
+            prompt_wav_seg_numpy = prompt_wav_seg_numpy.astype(np.float32)
             prompt_speech_16k = postprocess(torch.Tensor(prompt_wav_seg_numpy).unsqueeze(0))
-            if prompt_srt:
-                # prompt_text = prompt_subtitles[i].content
-                prompt_text = ','.join(prompt_text_list)
-                print(f"prompt_text:{prompt_text}")
-                curr_output = self.cosyvoice.inference_zero_shot(curr_tts_text,prompt_text,prompt_speech_16k)
-            else:
-                curr_output = self.cosyvoice.inference_cross_lingual(curr_tts_text, prompt_speech_16k)
-            
-            curr_output_numpy = curr_output['tts_speech'].squeeze(0).numpy() * 32768
-            # print(curr_output_numpy.shape)
-            curr_output_numpy = curr_output_numpy.astype(np.int16)
-            text_audio = audiosegment.from_numpy_array(curr_output_numpy,target_sr)
-            # text_audio.export(os.path.join(output_dir,f"{i}_res.wav"),format="wav")
-            text_audio_dur_time = text_audio.duration_seconds * 1000
 
-            if i < len(text_subtitles) - 1:
-                nxt_start = text_subtitles[i+1].start.total_seconds() * 1000
-                dur_time =  nxt_start - start_time
-            else:
-                org_dur_time = audio_seg.duration_seconds * 1000
-                dur_time = org_dur_time - start_time
-            
-            ratio = text_audio_dur_time / dur_time
+            # Run synthesis inference
+            curr_output = self.run_inference(
+                curr_tts_text, prompt_speech_16k, prompt_srt, prompt_subtitles, i
+            )
 
-            if text_audio_dur_time > dur_time:
-                tmp_numpy = speed_change(curr_output_numpy,ratio,target_sr)
-                tmp_audio = audiosegment.from_numpy_array(tmp_numpy,target_sr)
-                # tmp_audio = self.map_vocal(text_audio,ratio,dur_time,f"{i}_res.wav")
-                tmp_audio += audiosegment.silent(dur_time - tmp_audio.duration_seconds*1000,target_sr)
-            else:
-                tmp_audio = text_audio + audiosegment.silent(dur_time - text_audio_dur_time,target_sr)
-          
+            # Align audio segment with subtitle timing
+            tmp_audio = self.align_audio(curr_output, text_sub, text_subtitles, i, audio_seg)
+
+            # Append the generated segment
             new_audio_seg += tmp_audio
 
-            if i == len(text_subtitles) - 1:
-                new_audio_seg += audio_seg[end_time:]
-
+        # Finalize and return the audio
+        logger.info("Finalizing the generated audio...")
         output_numpy = new_audio_seg.to_numpy_array() / 32768
-        # print(output_numpy.shape)
-        audio = {"waveform": torch.stack([torch.Tensor(output_numpy).unsqueeze(0)]),"sample_rate":target_sr}
+        audio = {"waveform": torch.stack([torch.Tensor(output_numpy).unsqueeze(0)]), "sample_rate": target_sr}
         return (audio,)
 
+    def load_srt(self, srt_file):
+        """Load and parse SRT subtitle file."""
+        with open(srt_file, 'r', encoding="utf-8") as file:
+            content = file.read()
+        return list(SrtParse(content))
+
+    def preprocess_audio(self, audio_data):
+        """Preprocess prompt audio, including resampling and converting to NumPy format."""
+        waveform = audio_data['waveform'].squeeze(0)
+        source_sr = audio_data['sample_rate']
+        speech = waveform.mean(dim=0, keepdim=True)
+
+        if source_sr != 16000:
+            logger.info(f"Resampling audio from {source_sr}Hz to 16000Hz...")
+            speech = torchaudio.transforms.Resample(orig_freq=source_sr, new_freq=16000)(speech)
+        
+        speech_numpy = (speech.squeeze(0).numpy() * 32768).astype(np.int16)
+        return speech_numpy, 16000
+
+    def get_tts_text_and_prompt(self, text_sub, index, subtitles, language, if_single, audio_seg, prompt_srt, prompt_subtitles):
+        """Extract TTS text and prompt audio segment based on subtitle content and index."""
+        start_time = text_sub.start.total_seconds() * 1000
+        end_time = text_sub.end.total_seconds() * 1000
+
+        curr_tts_text = language + text_sub.content if if_single else language + text_sub.content[1:]
+        speaker_id = text_sub.content[0] if not if_single else None
+
+        # Extract prompt audio segment
+        prompt_wav_seg = audio_seg[start_time:end_time]
+        prompt_text_list = []
+
+        if prompt_srt:
+            prompt_text_list.append(prompt_subtitles[index].content)
+
+        # Extend prompt audio if duration is insufficient
+        prompt_wav_seg = self.extend_prompt_wav(
+            prompt_wav_seg, subtitles, index, speaker_id, if_single, audio_seg, prompt_srt, prompt_subtitles, prompt_text_list
+        )
+
+        return curr_tts_text, prompt_wav_seg
+
+    def extend_prompt_wav(self, prompt_wav_seg, subtitles, index, speaker_id, if_single, audio_seg, prompt_srt, prompt_subtitles, prompt_text_list):
+        """Extend prompt audio segment to ensure sufficient duration."""
+        while prompt_wav_seg.duration_seconds < 30:
+            # Extend forward
+            for j in range(index + 1, len(subtitles)):
+                j_start = subtitles[j].start.total_seconds() * 1000
+                j_end = subtitles[j].end.total_seconds() * 1000
+                if if_single or subtitles[j].content[0] == speaker_id:
+                    prompt_wav_seg += audiosegment.silent(500, frame_rate=prompt_sr) + audio_seg[j_start:j_end]
+                    if prompt_srt:
+                        prompt_text_list.append(prompt_subtitles[j].content)
+
+            # Extend backward
+            for j in range(0, index):
+                j_start = subtitles[j].start.total_seconds() * 1000
+                j_end = subtitles[j].end.total_seconds() * 1000
+                if if_single or subtitles[j].content[0] == speaker_id:
+                    prompt_wav_seg += audiosegment.silent(500, frame_rate=prompt_sr) + audio_seg[j_start:j_end]
+                    if prompt_srt:
+                        prompt_text_list.append(prompt_subtitles[j].content)
+
+            if prompt_wav_seg.duration_seconds > 3:
+                break        
+        
+        return prompt_wav_seg
+
+    def run_inference(self, curr_tts_text, prompt_speech_16k, prompt_srt, prompt_subtitles, index):
+        """Run the speech synthesis model."""
+        if prompt_srt:
+            prompt_text = ','.join([prompt_subtitles[index].content])
+            logger.info(f"Running inference with prompt text: {prompt_text}")
+            return self.cosyvoice.inference_zero_shot(curr_tts_text, prompt_text, prompt_speech_16k)
+        else:
+            logger.info("Running cross-lingual inference...")
+            return self.cosyvoice.inference_cross_lingual(curr_tts_text, prompt_speech_16k)
+
+    def align_audio(self, curr_output, text_sub, subtitles, index, audio_seg):
+        """Align generated audio with subtitle timing."""
+        import types
+
+        if isinstance(curr_output, types.GeneratorType):
+            # curr_output = next(curr_output)
+            for value in curr_output:
+                curr_output = value
+                break  # 只获取第一个值
+        
+        
+        curr_output_numpy = (curr_output['tts_speech'].squeeze(0).numpy() * 32768).astype(np.int16)
+        text_audio = audiosegment.from_numpy_array(curr_output_numpy, target_sr)
+
+        start_time = text_sub.start.total_seconds() * 1000
+        if index < len(subtitles) - 1:
+            nxt_start = subtitles[index + 1].start.total_seconds() * 1000
+            duration = nxt_start - start_time
+        else:
+            duration = audio_seg.duration_seconds * 1000 - start_time
+
+        ratio = text_audio.duration_seconds * 1000 / duration
+        if ratio > 1:
+            tmp_audio = speed_change(curr_output_numpy, ratio, target_sr)
+            tmp_audio = audiosegment.from_numpy_array(tmp_audio, target_sr)
+        else:
+            tmp_audio = text_audio + audiosegment.silent(duration - text_audio.duration_seconds * 1000, target_sr)
+
+        return tmp_audio
     
 class LoadSRT:
     @classmethod
@@ -344,3 +420,5 @@ class LoadSRT:
     def load_srt(self, srt):
         srt_path = folder_paths.get_annotated_filepath(srt)
         return (srt_path,)
+
+

@@ -2,10 +2,10 @@
 
 import logging
 
-def setup_logging(log_file="app.log"):
+def setup_logging(log_file="app.log",lvl = logging.INFO):
     """Configure logging for the entire application."""
     logging.basicConfig(
-        level=logging.DEBUG,  # 设置全局日志级别
+        level=lvl,  # 设置全局日志级别
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[

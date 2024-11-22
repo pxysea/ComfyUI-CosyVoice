@@ -4,3 +4,5 @@ test*
 test\**
 tools
 .vscode
+
+app.log

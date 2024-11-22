@@ -6,9 +6,11 @@ import zipfile
 import torchaudio
 import numpy as np
 import os,sys
-import folder_paths
+
 now_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(now_dir)
+
+import folder_paths
 input_dir = folder_paths.get_input_directory()
 output_dir = os.path.join(folder_paths.get_output_directory(),"cosyvoice_dubb")
 pretrained_models = os.path.join(now_dir,"pretrained_models")
@@ -35,14 +37,22 @@ max_val = 0.8
 prompt_sr, target_sr = 16000, 22050
 
 
-def postprocess(speech, top_db=60, hop_length=220, win_length=440):
+def postprocess(speech, top_db=60, hop_length=220, win_length=440,target_sr=22050,max_val=1):
     speech, _ = librosa.effects.trim(
         speech, top_db=top_db,
         frame_length=win_length,
         hop_length=hop_length
     )
+
+    if speech.size == 0:
+        raise ValueError("All samples were trimmed as silence. Please check input or adjust 'top_db'.")
+
     if speech.abs().max() > max_val:
         speech = speech / speech.abs().max() * max_val
+
+    if speech.dim() == 1:
+        speech = speech.unsqueeze(0)  # 将 (N,) 转为 (1, N)
+
     speech = torch.concat([speech, torch.zeros(1, int(target_sr * 0.2))], dim=1)
     
     return speech
@@ -172,6 +182,8 @@ class CosyVoiceNode:
 
         if self.model_dir != model_dir:
             self.model_dir = model_dir
+        
+        logger.info(f'init model dir: {self.model_dir}')
 
         if self.cosyvoice is None:
             self.cosyvoice = load_cosyvoice(inference_mode,prompt_text=prompt_text,prompt_wav=prompt_wav,instruct_text=instruct_text)
@@ -179,30 +191,41 @@ class CosyVoiceNode:
         if prompt_wav:
             waveform = prompt_wav['waveform'].squeeze(0)
             source_sr = prompt_wav['sample_rate']
-            speech = waveform.mean(dim=0,keepdim=True)
+
+            num_samples = waveform.shape[0]  
+            duration = num_samples / source_sr 
+            logger.debug(f"sample number: {num_samples}, duration: {duration:.2f} s")
+
+            # fix https://az-web.site/posts/2024/11/e83df2df.html#waveform-mean-%E9%9F%B3%E9%A2%91%E6%97%B6%E9%95%BF%E5%8F%98%E4%B8%BA-0-%E9%97%AE%E9%A2%98%E5%88%86%E6%9E%90%EF%BC%9A
+            if waveform.dim() == 1:
+                speech = waveform.unsqueeze(0)  # 保持 (1, N)
+            else:  # 
+                speech = waveform.mean(dim=0, keepdim=True)
+
             if source_sr != prompt_sr:
                 speech = torchaudio.transforms.Resample(orig_freq=source_sr, new_freq=prompt_sr)(speech)
+            
+            logger.debug(f'prompt wave shape :{speech.shape} , rate:{prompt_sr}')
+
         if inference_mode == '预训练音色':
-            print('get sft inference request')
-            print(self.model_dir)
+            logger.debug('get sft inference request')
             set_all_random_seed(seed)
             output = self.cosyvoice.inference_sft(tts_text, sft_dropdown)
         elif inference_mode == '3s极速复刻':
-            print('get zero_shot inference request')
-            print(self.model_dir)
+            logger.debug('get zero_shot inference request')
             prompt_speech_16k = postprocess(speech= speech,target_sr=target_sr,max_val=max_val)
+
             set_all_random_seed(seed)
             output = self.cosyvoice.inference_zero_shot(tts_text, prompt_text, prompt_speech_16k)
         elif inference_mode == '跨语种复刻':
-            print('get cross_lingual inference request')
-            print(self.model_dir)
+            logger.debug('get cross_lingual inference request')
             prompt_speech_16k = postprocess(speech= speech,target_sr=target_sr,max_val=max_val)
             set_all_random_seed(seed)
             output = self.cosyvoice.inference_cross_lingual(tts_text, prompt_speech_16k)
         else:
-            print('get instruct inference request')
+            logger.debug('get instruct inference request')
             set_all_random_seed(seed)
-            print(self.model_dir)
+            logger.debug(self.model_dir)
             output = self.cosyvoice.inference_instruct(tts_text, sft_dropdown, instruct_text)
         output_list = []
         for out_dict in output:
@@ -212,7 +235,7 @@ class CosyVoiceNode:
                 output_numpy = speed_change(output_numpy,speed,target_sr)
             output_list.append(torch.Tensor(output_numpy/32768).unsqueeze(0))
         t1 = ttime()
-        print("cost time \t %.3f" % (t1-t0))
+        logger.debug("cost time \t %.3f" % (t1-t0))
         audio = {"waveform": torch.cat(output_list,dim=1).unsqueeze(0),"sample_rate":target_sr}
         return (audio,)
 
@@ -247,16 +270,16 @@ class CosyVoiceDubbingNode:
         set_all_random_seed(seed)
         
         if self.cosyvoice is None:
-            logger.info("Initializing CosyVoice model...")
+            logger.info(f"Initializing CosyVoice model {model_dir} ...")
             self.cosyvoice = CosyVoice(model_dir)
         
         # Load subtitle files
-        logger.info("Loading TTS SRT subtitles...")
+        logger.debug("Loading TTS SRT subtitles...")
         text_subtitles = self.load_srt(tts_srt)
         prompt_subtitles = self.load_srt(prompt_srt) if prompt_srt else None
 
         # Preprocess prompt audio
-        logger.info("Preprocessing prompt audio...")
+        logger.debug("Preprocessing prompt audio...")
         speech_numpy, prompt_sr = self.preprocess_audio(prompt_wav)
         speech_numpy = speech_numpy.astype(np.int16)
         audio_seg = audiosegment.from_numpy_array(speech_numpy, prompt_sr)
@@ -269,7 +292,7 @@ class CosyVoiceDubbingNode:
         new_audio_seg = audiosegment.silent(0, target_sr)  # target_sr = 22050
 
         for i, text_sub in enumerate(text_subtitles):
-            logger.info(f"Processing subtitle {i + 1}/{len(text_subtitles)}...")
+            logger.debug(f"Processing subtitle {i + 1}/{len(text_subtitles)}...")
             
             curr_tts_text, prompt_wav_seg = self.get_tts_text_and_prompt(
                 text_sub, i, text_subtitles, language, if_single, audio_seg, prompt_srt, prompt_subtitles
@@ -292,7 +315,7 @@ class CosyVoiceDubbingNode:
             new_audio_seg += tmp_audio
 
         # Finalize and return the audio
-        logger.info("Finalizing the generated audio...")
+        logger.debug("Finalizing the generated audio...")
         output_numpy = new_audio_seg.to_numpy_array() / 32768
         audio = {"waveform": torch.stack([torch.Tensor(output_numpy).unsqueeze(0)]), "sample_rate": target_sr}
         return (audio,)
@@ -310,7 +333,7 @@ class CosyVoiceDubbingNode:
         speech = waveform.mean(dim=0, keepdim=True)
 
         if source_sr != 16000:
-            logger.info(f"Resampling audio from {source_sr}Hz to 16000Hz...")
+            logger.debug(f"Resampling audio from {source_sr}Hz to 16000Hz...")
             speech = torchaudio.transforms.Resample(orig_freq=source_sr, new_freq=16000)(speech)
         
         speech_numpy = (speech.squeeze(0).numpy() * 32768).astype(np.int16)

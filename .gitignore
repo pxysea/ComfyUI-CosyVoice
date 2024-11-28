@@ -1,8 +1,8 @@
 __pycache__
 pretrained_models
 test*
-test\**
 tools
+output
 .vscode
 
-app.log
+*.log

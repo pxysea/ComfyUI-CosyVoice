@@ -29,3 +29,4 @@ pydub
 audiosegment
 srt
 ffmpeg-python
+rotary_embedding_torch==0.8.5

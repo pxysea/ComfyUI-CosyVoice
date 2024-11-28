@@ -92,20 +92,21 @@ class Processor:
         exists = os.path.exists(tagger_path) and os.path.exists(
             verbalizer_path)
         if exists and not overwrite_cache:
-            logger.info("found existing fst: {}".format(tagger_path))
-            logger.info("                    {}".format(verbalizer_path))
-            logger.info("skip building fst for {} ...".format(self.name))
+            logger.debug("found existing fst: {}".format(tagger_path))
+            logger.debug("                    {}".format(verbalizer_path))
+            logger.debug("skip building fst for {} ...".format(self.name))
             self.tagger = Fst.read(tagger_path).optimize()
             self.verbalizer = Fst.read(verbalizer_path).optimize()
         else:
-            logger.info("building fst for {} ...".format(self.name))
+            logger.debug("building fst for {} ...".format(self.name))
             self.build_tagger()
             self.build_verbalizer()
             self.tagger.optimize().write(tagger_path)
             self.verbalizer.optimize().write(verbalizer_path)
-            logger.info("done")
-            logger.info("fst path: {}".format(tagger_path))
-            logger.info("          {}".format(verbalizer_path))
+            # logger.info("building fst done")
+            logger.debug("fst path: {}".format(tagger_path))
+            logger.debug("          {}".format(verbalizer_path))
+        logger.info(f"building fst {tagger_path} successful")
 
     def tag(self, input):
         if len(input) == 0:

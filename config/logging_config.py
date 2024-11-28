@@ -10,6 +10,6 @@ def setup_logging(log_file="app.log",lvl = logging.INFO):
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[
             logging.StreamHandler(),  # 输出到控制台
-            logging.FileHandler(log_file, mode="a", encoding="utf-8"),  # 输出到文件
+            # logging.FileHandler(log_file, mode="a", encoding="utf-8"),  # 输出到文件
         ],
     )
